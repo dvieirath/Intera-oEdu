@@ -1,0 +1,136 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import '../storage/secure_storage.dart';
+import '../../data/repositories/auth_repository_impl.dart';
+import '../../domain/repositories/auth_repository.dart';
+
+/// Estados possíveis da autenticação
+enum AuthStatus { loading, authenticated, unauthenticated }
+
+/// Gerenciador global de estado de autenticação.
+/// Responsável por verificar sessão, login, logout e refresh de token.
+class AuthNotifier extends ChangeNotifier {
+  final AuthRepository _authRepo;
+  final SecureStorageService _storage;
+
+  AuthStatus _status = AuthStatus.loading;
+  AuthStatus get status => _status;
+  String? _userId;
+  String? get userId => _userId;
+  List<String> _roles = const [];
+  List<String> get roles => _roles;
+
+  bool get isLoading => _status == AuthStatus.loading;
+  bool get isAuthenticated => _status == AuthStatus.authenticated;
+  bool get isAdmin => _roles.contains('admin');
+
+  AuthNotifier({AuthRepository? authRepo, SecureStorageService? storage})
+    : _authRepo = authRepo ?? AuthRepositoryImpl(),
+      _storage = storage ?? SecureStorageService();
+
+  /// Verifica se há sessão válida ao iniciar o app.
+  /// - Se tem access token → autenticado
+  /// - Se tem refresh token → tenta renovar → autenticado ou não autenticado
+  /// - Se não tem nada → não autenticado
+  Future<void> checkSession() async {
+    _setStatus(AuthStatus.loading);
+
+    try {
+      final accessToken = await _storage.getAccessToken();
+      final expiresAt = accessToken == null
+          ? null
+          : _decodeClaim<num>(accessToken, 'exp');
+      if (accessToken != null &&
+          _decodeUserId(accessToken) != null &&
+          expiresAt != null &&
+          expiresAt > DateTime.now().millisecondsSinceEpoch / 1000) {
+        _userId = _decodeUserId(accessToken);
+        _roles = _decodeRoles(accessToken);
+        _setStatus(AuthStatus.authenticated);
+        return;
+      }
+
+      final refreshToken = await _storage.getRefreshToken();
+      if (refreshToken != null) {
+        await _authRepo.refreshToken();
+        final token = await _storage.getAccessToken();
+        if (token == null || _decodeUserId(token) == null) {
+          throw StateError('Token de sessão inválido');
+        }
+        _userId = _decodeUserId(token);
+        _roles = _decodeRoles(token);
+        _setStatus(AuthStatus.authenticated);
+        return;
+      }
+    } catch (_) {
+      // Refresh falhou ou token inválido — limpar storage
+      await _storage.clearTokens();
+    }
+
+    await _storage.clearTokens();
+    _setStatus(AuthStatus.unauthenticated);
+  }
+
+  /// Realiza o login e atualiza o estado para autenticado.
+  Future<void> login(String email, String password) async {
+    await _authRepo.login(email, password);
+    final token = await _storage.getAccessToken();
+    _userId = token != null ? _decodeUserId(token) : null;
+    _roles = token != null ? _decodeRoles(token) : const [];
+    _setStatus(AuthStatus.authenticated);
+  }
+
+  /// Realiza login com ID token Google e atualiza o estado.
+  Future<void> loginWithGoogleIdToken(String idToken) async {
+    await _authRepo.loginWithGoogleIdToken(idToken);
+    final token = await _storage.getAccessToken();
+    _userId = token != null ? _decodeUserId(token) : null;
+    _roles = token != null ? _decodeRoles(token) : const [];
+    _setStatus(AuthStatus.authenticated);
+  }
+
+  /// Realiza o logout: invalida token no servidor e limpa estado local.
+  Future<void> logout() async {
+    await _authRepo.logout();
+    _setStatus(AuthStatus.unauthenticated);
+  }
+
+  /// Chamado pelo ApiClient quando recebe 401 e o refresh também falha.
+  void forceLogout() {
+    _storage.clearTokens();
+    _setStatus(AuthStatus.unauthenticated);
+  }
+
+  void _setStatus(AuthStatus status) {
+    if (status == AuthStatus.unauthenticated) {
+      _userId = null;
+      _roles = const [];
+    }
+    _status = status;
+    notifyListeners();
+  }
+
+  /// Decodes the JWT payload to extract the user ID (`sub` claim).
+  /// No signature verification needed — we already trust our own storage.
+  static String? _decodeUserId(String token) =>
+      _decodeClaim<String>(token, 'sub');
+
+  static List<String> _decodeRoles(String token) {
+    final raw = _decodeClaim<List<dynamic>>(token, 'roles');
+    if (raw == null) return const [];
+    return raw.map((e) => e.toString()).toList(growable: false);
+  }
+
+  static T? _decodeClaim<T>(String token, String key) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return null;
+      final normalized = base64.normalize(parts[1]);
+      final decoded = utf8.decode(base64.decode(normalized));
+      final json = jsonDecode(decoded) as Map<String, dynamic>;
+      return json[key] as T?;
+    } catch (_) {
+      return null;
+    }
+  }
+}

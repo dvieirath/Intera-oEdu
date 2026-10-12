@@ -1,0 +1,57 @@
+import 'package:flutter/foundation.dart';
+import '../../../domain/entities/user.dart';
+import '../../../domain/repositories/profile_repository.dart';
+
+/// Gerencia o estado do perfil do usuário logado com cache local.
+/// Compartilhado entre MyProfileScreen e EditProfileScreen —
+/// ao editar e salvar, o perfil atualizado é refletido automaticamente.
+class ProfileNotifier extends ChangeNotifier {
+  final ProfileRepository _repo;
+
+  ProfileNotifier(this._repo);
+
+  User? profile;
+  bool loading = false;
+  String? error;
+
+  /// Carrega o perfil. Ignora se já há dados em cache.
+  Future<void> load({bool force = false}) async {
+    if (!force && profile != null) return;
+    loading = true;
+    error = null;
+    notifyListeners();
+
+    try {
+      profile = await _repo.getMyProfile();
+      error = null;
+    } catch (e) {
+      error = e.toString();
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Atualiza o perfil e invalida o cache.
+  Future<void> update(Map<String, dynamic> data) async {
+    await _repo.updateProfile(data);
+    // Recarrega do servidor para garantir dados frescos
+    await load(force: true);
+  }
+
+  /// Faz upload de novo avatar e recarrega o perfil.
+  /// Retorna a nova URL ou lança em caso de erro.
+  Future<String> uploadAvatar({
+    required List<int> bytes,
+    required String filename,
+    required String mimeType,
+  }) async {
+    final url = await _repo.uploadAvatar(
+      bytes: bytes,
+      filename: filename,
+      mimeType: mimeType,
+    );
+    await load(force: true);
+    return url;
+  }
+}

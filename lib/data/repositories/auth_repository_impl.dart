@@ -1,0 +1,148 @@
+import 'dart:convert';
+
+import '../../../core/config/app_config.dart';
+import '../../../core/network/api_client.dart';
+import '../../../core/network/api_endpoints.dart';
+import '../../../domain/repositories/auth_repository.dart';
+import '../../../core/storage/secure_storage.dart';
+
+class AuthRepositoryImpl implements AuthRepository {
+  final ApiClient _api;
+  final SecureStorageService _storage;
+
+  AuthRepositoryImpl({ApiClient? api, SecureStorageService? storage})
+      : _api = api ?? ApiClient(),
+        _storage = storage ?? SecureStorageService();
+
+  @override
+  Future<void> register(String email) async {
+    await _api.post(ApiEndpoints.register, body: {'email': email});
+  }
+
+  @override
+  Future<String> verifyOtp(String email, String code) async {
+    final response = await _api.post(ApiEndpoints.verifyOtp, body: {
+      'email': email,
+      'code': code,
+    });
+    return response['temporary_token'] as String;
+  }
+
+  @override
+  Future<void> completeRegistration({
+    required String temporaryToken,
+    required String password,
+    required String fullName,
+    String? course,
+    int? period,
+    List<String>? skillIds,
+  }) async {
+    final response = await _api.post(ApiEndpoints.completeRegistration, body: {
+      'temporary_token': temporaryToken,
+      'password': password,
+      'full_name': fullName,
+      if (course != null) 'course': course,
+      if (period != null) 'period': period,
+      if (skillIds != null) 'skill_ids': skillIds,
+      'consent': {
+        'terms_version': 'v1.0',
+        'privacy_version': 'v1.0',
+      },
+    });
+    await _saveTokens(response['tokens'] as Map<String, dynamic>);
+  }
+
+  @override
+  Future<void> login(String email, String password) async {
+    if (AppConfig.devMode) {
+      await _saveDevTokens(email);
+      return;
+    }
+    final response = await _api.post(ApiEndpoints.login, body: {
+      'email': email,
+      'password': password,
+    });
+    await _saveTokens(response['tokens'] as Map<String, dynamic>);
+  }
+
+  @override
+  Future<void> loginWithGoogleIdToken(String idToken) async {
+    final response = await _api.post(
+      ApiEndpoints.google,
+      body: {'id_token': idToken},
+    );
+    await _saveTokens(response['tokens'] as Map<String, dynamic>);
+  }
+
+  @override
+  Future<void> refreshToken() async {
+    final refreshToken = await _storage.getRefreshToken();
+    if (refreshToken == null) throw Exception('Sem refresh token');
+
+    final response = await _api.post(ApiEndpoints.refresh, body: {
+      'refresh_token': refreshToken,
+    });
+    await _saveTokens(response['tokens'] as Map<String, dynamic>);
+  }
+
+  @override
+  Future<void> logout() async {
+    final refreshToken = await _storage.getRefreshToken();
+    if (refreshToken != null) {
+      try {
+        await _api.post(ApiEndpoints.logout, body: {'refresh_token': refreshToken});
+      } catch (_) {
+        // Logout local deve sempre ter sucesso mesmo que a API falhe
+      }
+    }
+    await _storage.clearTokens();
+  }
+
+  @override
+  Future<void> forgotPassword(String email) async {
+    await _api.post(ApiEndpoints.forgotPassword, body: {'email': email});
+  }
+
+  @override
+  Future<void> resetPassword({
+    required String email,
+    required String code,
+    required String newPassword,
+  }) async {
+    await _api.post(ApiEndpoints.resetPassword, body: {
+      'email': email,
+      'code': code,
+      'new_password': newPassword,
+    });
+  }
+
+  @override
+  bool get isAuthenticated => _storage.isAuthenticated;
+
+  Future<void> _saveTokens(Map<String, dynamic> tokens) async {
+    await _storage.saveTokens(
+      accessToken: tokens['access_token'] as String,
+      refreshToken: tokens['refresh_token'] as String,
+    );
+  }
+
+  /// Gera um JWT "sem assinatura" (alg=none) para uso exclusivo em devMode,
+  /// permitindo testar a UI sem o backend Docker no ar. Em produção este
+  /// caminho nunca é executado porque devMode é falso.
+  Future<void> _saveDevTokens(String email) async {
+    final exp = DateTime.now()
+            .add(const Duration(hours: 24))
+            .millisecondsSinceEpoch ~/
+        1000;
+    final sub = 'dev-${email.hashCode.abs()}';
+    final header = _b64Url({'alg': 'none', 'typ': 'JWT'});
+    final payload = _b64Url({'sub': sub, 'email': email, 'exp': exp});
+    final token = '$header.$payload.dev';
+    await _storage.saveTokens(accessToken: token, refreshToken: token);
+  }
+
+  String _b64Url(Map<String, dynamic> data) {
+    final bytes = utf8.encode(jsonEncode(data));
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+}
