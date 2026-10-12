@@ -235,8 +235,3 @@ re-especificação, testes e lacunas, análise crítica de IA e relato técnico.
 Pode compor o relatório acadêmico após revisão dos integrantes. O README serve
 como índice e matriz de rastreabilidade da entrega.
 
-Antes de declarar a entrega concluída, o grupo deve publicar o commit final,
-confirmar o repositório oficial, anexar revisões de colegas e evidências de
-issues/sprints, executar a homologação e completar a comparação real entre
-ferramentas de IA. Nesta etapa foram preparados arquivos e documentação, sem
-execução da aplicação, instalação de dependências ou publicação no GitHub.
