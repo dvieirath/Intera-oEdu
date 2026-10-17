@@ -1,5 +1,8 @@
 class Validators {
   static String? email(String? value) {
+    // Telas enviam o email com trim(); validar o mesmo valor evita rejeitar
+    // espaços extras inseridos por autocompletar no teclado mobile.
+    value = value?.trim();
     if (value == null || value.isEmpty) return 'Email é obrigatório';
     if (!RegExp(r'^[\w\.-]+@[\w\.-]+\.\w+$').hasMatch(value)) {
       return 'Informe um email válido';
@@ -23,6 +26,7 @@ class Validators {
   }
 
   static String? otpCode(String? value) {
+    value = value?.trim();
     if (value == null || value.isEmpty) return 'Informe o código de verificação';
     if (value.length != 6) return 'O código deve ter 6 dígitos';
     if (!RegExp(r'^\d{6}$').hasMatch(value)) return 'O código deve conter apenas números';
